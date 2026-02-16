@@ -1,6 +1,6 @@
 # Wheels
 
-A Julia-based GUI application for recording and visualizing dynamic balancing test data for wheel balancing with two measurement planes (M1 and M2).
+A Julia application for recording and visualizing dynamic balancing test data for wheel balancing with two measurement planes (M1 and M2).
 
 ## Overview
 
