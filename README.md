@@ -1,6 +1,6 @@
 # Wheels
 
-A Julia-based GUI application for recording and visualizing dynamic balancing test data for rotating machinery with two measurement planes (M1 and M2).
+A Julia-based GUI application for recording and visualizing dynamic balancing test data for wheel balancing with two measurement planes (M1 and M2).
 
 ## Overview
 
@@ -12,7 +12,6 @@ This application provides an interactive interface for conducting dynamic balanc
 - **Real-time Visualization**: Polar plot showing specified vs. actual balancing masses
 - **Data Recording**: Track all completed test steps with full details
 - **CSV Export**: Export complete test results for analysis
-- **Dark Theme UI**: Modern, easy-to-read interface
 - **Initial Mass Tracking**: Separate storage of baseline balancing configuration
 
 ## Dependencies
