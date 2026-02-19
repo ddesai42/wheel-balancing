@@ -1,7 +1,7 @@
 #<Filename>: <Wheels.jl>
 #<Author>:   <DANIEL DESAI>
-#<Updated>:  <2026-02-18>
-#<Version>:  <0.0.2>
+#<Updated>:  <2026-02-19>
+#<Version>:  <0.0.3>
 
 using Gtk
 using Cairo
@@ -9,26 +9,26 @@ using Printf
 using Dates
 
 # ============================================================================
-# TEST SEQUENCE DEFINITION
+# TEST SEQUENCE
 # ============================================================================
 
 const TEST_STEPS = [
     (step=0, desc="Step 0: Both planes with initial balancing masses",
      m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
      m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=1, desc="Step 1: M1 add 1 oz @ 45°",
+    (step=1, desc="Step 1: M1 add 1 @ 45°",
      m1_add=1.0, m1_angle=45.0,  m1_remove=0.0, m1_remove_angle=0.0,
      m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=2, desc="Step 2: M2 add 1 oz @ 45°",
+    (step=2, desc="Step 2: M2 add 1 @ 45°",
      m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
      m2_add=1.0, m2_angle=45.0,  m2_remove=0.0, m2_remove_angle=0.0),
-    (step=3, desc="Step 3: M1 remove 1 oz @ 45° (transfer to M2) → M2 now 2 oz @ 45°",
+    (step=3, desc="Step 3: M1 remove 1 @ 45° → transfer to M2",
      m1_add=0.0, m1_angle=0.0,   m1_remove=1.0, m1_remove_angle=45.0,
      m2_add=1.0, m2_angle=45.0,  m2_remove=0.0, m2_remove_angle=0.0),
-    (step=4, desc="Step 4: M1 add 2 oz @ 225°",
+    (step=4, desc="Step 4: M1 add 2 @ 225°",
      m1_add=2.0, m1_angle=225.0, m1_remove=0.0, m1_remove_angle=0.0,
      m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=5, desc="Step 5: M2 remove 2 oz @ 45°, M2 add 1 oz @ 135°",
+    (step=5, desc="Step 5: M2 remove 2 @ 45°, add 1 @ 135°",
      m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
      m2_add=1.0, m2_angle=135.0, m2_remove=2.0, m2_remove_angle=45.0)
 ]
@@ -50,67 +50,61 @@ end
 # CSV
 # ============================================================================
 
+const CSV_HEADER = "Step,M1_Mass,M1_Angle,M2_Mass,M2_Angle," *
+                   "M1_Equiv_Mass,M1_Equiv_Angle,M2_Equiv_Mass,M2_Equiv_Angle," *
+                   "Static_Moment,Static_Angle,Couple_M1,Couple_M1_Angle,Couple_M2,Couple_M2_Angle"
+
 function initialize_csv(csv_file)
-    isfile(csv_file) && return
     open(csv_file, "w") do io
-        println(io, "Step,M1_Spec,M1_Actual,M1_Angle,M2_Spec,M2_Actual,M2_Angle," *
-                    "M1_Equiv_Mass,M1_Equiv_Angle,M2_Equiv_Mass,M2_Equiv_Angle")
+        println(io, CSV_HEADER)
     end
 end
 
 function export_all_steps_to_csv(csv_file, completed_steps)
     try
         open(csv_file, "w") do io
-            println(io, "Step,M1_Spec,M1_Actual,M1_Angle,M2_Spec,M2_Actual,M2_Angle," *
-                        "M1_Equiv_Mass,M1_Equiv_Angle,M2_Equiv_Mass,M2_Equiv_Angle")
+            println(io, CSV_HEADER)
             for sd in completed_steps
-                println(io, "\"$(sd.desc)\",$(sd.m1_spec),$(sd.m1_actual),$(sd.m1_angle)," *
-                            "$(sd.m2_spec),$(sd.m2_actual),$(sd.m2_angle)," *
+                println(io, "\"$(sd.desc)\",$(sd.m1_mass),$(sd.m1_angle)," *
+                            "$(sd.m2_mass),$(sd.m2_angle)," *
                             "$(sd.m1_equiv_mass),$(sd.m1_equiv_angle)," *
-                            "$(sd.m2_equiv_mass),$(sd.m2_equiv_angle)")
+                            "$(sd.m2_equiv_mass),$(sd.m2_equiv_angle)," *
+                            "$(sd.static_moment),$(sd.static_angle)," *
+                            "$(sd.couple_m1),$(sd.couple_m1_angle)," *
+                            "$(sd.couple_m2),$(sd.couple_m2_angle)")
             end
         end
         println("✓ Exported $(length(completed_steps)) steps to $csv_file")
     catch e
-        @warn "Failed to export: $e"
+        println("ERROR in export: $e")
+        println(stacktrace(catch_backtrace()))
     end
 end
 
 # ============================================================================
-# ISOMETRIC DRAWING
+# DRAWING
 # ============================================================================
 
-# Convert a balancer angle (0° = top, clockwise) + radius in pixels
-# to isometric screen (dx, dy) relative to plane centre.
-# The wheel plane sits in 3D: Y axis = up (screen), X axis = recedes into screen.
-# iso_skew_x, iso_skew_y: screen pixels per pixel of wheel-X (foreshortening).
 function wheel_to_screen(r_px, angle_deg, iso_skew_x, iso_skew_y)
-    # Balancer convention: 0° = top, clockwise
-    # → math angle: 0° = right, CCW  => θ_math = 90° - angle_deg
-    θ = deg2rad(90.0 - angle_deg)
-    # Wheel-plane coords (right = X, up = Y), pixels
-    wx = r_px * cos(θ)   # horizontal component in wheel plane
-    wy = r_px * sin(θ)   # vertical component in wheel plane
-    # Project: vertical stays vertical; horizontal is foreshortened + tilted
+    θ  = deg2rad(angle_deg - 90.0)
+    wx = r_px * cos(θ)
+    wy = r_px * sin(θ)
     sx =  wx * iso_skew_x
-    sy = -wy - wx * iso_skew_y   # screen Y is inverted; horizontal recedes upward
+    sy = -wy - wx * iso_skew_y
     return sx, sy
 end
 
 function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
                     label, col_spec, col_actual, col_equiv,
                     spec_z, actual_z, equiv_z)
-
-    # --- concentric rings (ellipses via polyline) ---
+    # Rings
     for ri in 1:3
         r_px = ri * scale
         set_source_rgba(ctx, 0.55, 0.55, 0.55, 0.7)
         set_line_width(ctx, 1.0)
-        n = 90
-        first = true
+        n, first = 90, true
         for k in 0:n
-            a = 360.0 * k / n
-            dx, dy = wheel_to_screen(r_px, a, iso_skew_x, iso_skew_y)
+            dx, dy = wheel_to_screen(r_px, 360.0*k/n, iso_skew_x, iso_skew_y)
             if first; move_to(ctx, cx+dx, cy+dy); first=false
             else;      line_to(ctx, cx+dx, cy+dy)
             end
@@ -118,7 +112,7 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         stroke(ctx)
     end
 
-    # --- axis spokes ---
+    # Spokes
     set_source_rgba(ctx, 0.65, 0.65, 0.65, 0.5)
     set_line_width(ctx, 1.0)
     for a in [0.0, 90.0, 180.0, 270.0]
@@ -126,7 +120,7 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         move_to(ctx, cx, cy); line_to(ctx, cx+dx, cy+dy); stroke(ctx)
     end
 
-    # --- angle labels ---
+    # Angle labels
     select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_NORMAL)
     set_font_size(ctx, 10)
     set_source_rgb(ctx, 0.25, 0.25, 0.25)
@@ -135,18 +129,18 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         move_to(ctx, cx+dx-8, cy+dy+4); show_text(ctx, lbl)
     end
 
-    # --- plane label ---
+    # Plane label
     select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_BOLD)
     set_font_size(ctx, 14)
     set_source_rgb(ctx, 0.1, 0.1, 0.1)
     dx0, dy0 = wheel_to_screen(3.8*scale, 0.0, iso_skew_x, iso_skew_y)
     move_to(ctx, cx+dx0-8, cy+dy0-6); show_text(ctx, label)
 
-    # --- vector drawing ---
+    # Vector helper
     function draw_vec(z, color, style, tag)
         m = complex_to_mass(z)
         m < 0.001 && return
-        deg = complex_to_angle(z)
+        deg  = complex_to_angle(z)
         r_px = m * scale
         dx, dy = wheel_to_screen(r_px, deg, iso_skew_x, iso_skew_y)
         tx, ty = cx+dx, cy+dy
@@ -174,9 +168,8 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         set_source_rgb(ctx, 0.05, 0.05, 0.05)
         select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_NORMAL)
         set_font_size(ctx, 9)
-        off_y = style == :dashed ? -8 : 7
-        move_to(ctx, tx+8, ty+off_y)
-        show_text(ctx, @sprintf("%s: %.2f oz @ %.0f°", tag, m, deg))
+        move_to(ctx, tx+8, ty + (style == :dashed ? -8 : 7))
+        show_text(ctx, @sprintf("%s: %.2f @ %.0f°", tag, m, deg))
     end
 
     draw_vec(spec_z,   col_spec,   :dashed, label * "S")
@@ -185,7 +178,8 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
 end
 
 function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
-                            m2_spec_z, m2_actual_z, m2_equiv_z)
+                            m2_spec_z, m2_actual_z, m2_equiv_z,
+                            r_m1, r_m2, r_width)
     ctx = getgc(canvas)
     w   = width(canvas)
     h   = height(canvas)
@@ -193,36 +187,36 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
     set_source_rgb(ctx, 0.96, 0.96, 0.96)
     rectangle(ctx, 0, 0, w, h); fill(ctx)
 
-    scale      = min(w, h) / 10.0   # pixels per oz
-    iso_skew_x = 0.45               # horizontal foreshortening factor
-    iso_skew_y = 0.20               # vertical tilt per unit of horizontal
+    r_max      = max(r_m1, r_m2)
+    base_scale = min(w, h) / 10.0
+    scale_m1   = base_scale * (r_m1 / r_max)
+    scale_m2   = base_scale * (r_m2 / r_max)
+    iso_skew_x = 0.45
+    iso_skew_y = 0.20
 
-    # Plane centres — separated horizontally, same vertical
-    sep  = w * 0.23
-    cy   = h * 0.50
-    cx_m1 = w/2 + sep/2   # M1 rear  (right)
-    cx_m2 = w/2 - sep/2   # M2 front (left)
+    sep_raw = (r_width / r_max) * base_scale * 3.5
+    sep     = clamp(sep_raw, base_scale * 1.2, w * 0.38)
+    cy      = h * 0.50
+    cx_m1   = w/2 + sep/2
+    cx_m2   = w/2 - sep/2
 
-    # Axle — connect the two centres with a cylinder-like pair of lines
+    # Axle
     set_source_rgba(ctx, 0.35, 0.35, 0.35, 0.8)
     set_line_width(ctx, 4.0)
     move_to(ctx, cx_m2, cy); line_to(ctx, cx_m1, cy); stroke(ctx)
     set_source_rgba(ctx, 0.6, 0.6, 0.6, 0.5)
     set_line_width(ctx, 1.5)
     move_to(ctx, cx_m2, cy-3); line_to(ctx, cx_m1, cy-3); stroke(ctx)
-
-    # Axle end caps
     for cx_ in (cx_m1, cx_m2)
         set_source_rgba(ctx, 0.3, 0.3, 0.3, 0.9)
         arc(ctx, cx_, cy, 5, 0, 2π); fill(ctx)
     end
 
-    # Draw rear plane (M1) first so front (M2) overlaps it
-    draw_plane(ctx, cx_m1, cy, scale, iso_skew_x, iso_skew_y,
+    draw_plane(ctx, cx_m1, cy, scale_m1, iso_skew_x, iso_skew_y,
                "M1", (0.85,0.1,0.1), (0.85,0.1,0.1), (0.0,0.6,0.0),
                m1_spec_z, m1_actual_z, m1_equiv_z)
 
-    draw_plane(ctx, cx_m2, cy, scale, iso_skew_x, iso_skew_y,
+    draw_plane(ctx, cx_m2, cy, scale_m2, iso_skew_x, iso_skew_y,
                "M2", (0.1,0.2,0.9), (0.1,0.2,0.9), (0.55,0.0,0.75),
                m2_spec_z, m2_actual_z, m2_equiv_z)
 
@@ -263,12 +257,16 @@ function main()
 
     completed_steps = []
     initial_masses  = Ref{Union{Nothing,NamedTuple}}(nothing)
-    m1_cumulative   = Ref(0.0+0.0im)
-    m2_cumulative   = Ref(0.0+0.0im)
 
-    m1_spec_z   = Ref(0.0+0.0im);  m2_spec_z   = Ref(0.0+0.0im)
-    m1_actual_z = Ref(0.0+0.0im);  m2_actual_z = Ref(0.0+0.0im)
-    m1_equiv_z  = Ref(0.0+0.0im);  m2_equiv_z  = Ref(0.0+0.0im)
+    # All state refs
+    m1_cumulative = Ref(0.0+0.0im)
+    m2_cumulative = Ref(0.0+0.0im)
+    m1_spec_z     = Ref(0.0+0.0im)
+    m1_actual_z   = Ref(0.0+0.0im)
+    m1_equiv_z    = Ref(0.0+0.0im)
+    m2_spec_z     = Ref(0.0+0.0im)
+    m2_actual_z   = Ref(0.0+0.0im)
+    m2_equiv_z    = Ref(0.0+0.0im)
 
     win  = GtkWindow("Dynamic Wheel Balancing", 1600, 700)
     hbox = GtkBox(:h)
@@ -282,6 +280,13 @@ function main()
     end
     push!(hbox, vbox_controls)
 
+    # Entry helper — defined first so available for all fields
+    function labeled_entry(box, lbl_text, default="0.0")
+        lbl = GtkLabel(lbl_text); set_gtk_property!(lbl, :xalign, 0.0); push!(box, lbl)
+        ent = GtkEntry(); set_gtk_property!(ent, :text, default); push!(box, ent); ent
+    end
+
+    # Step selector
     lbl_step = GtkLabel("Test Step:")
     set_gtk_property!(lbl_step, :xalign, 0.0)
     push!(vbox_controls, lbl_step)
@@ -299,32 +304,42 @@ function main()
     set_gtk_property!(lbl_step_info, :xalign, 0.0)
     set_gtk_property!(lbl_step_info, :wrap, true)
     push!(vbox_controls, lbl_step_info)
-
-    push!(vbox_controls, GtkLabel(""))
-    lbl_equiv_hdr = GtkLabel("")
-    GAccessor.markup(lbl_equiv_hdr, "<b>Cumulative Equivalent Masses:</b>")
-    set_gtk_property!(lbl_equiv_hdr, :xalign, 0.0)
-    push!(vbox_controls, lbl_equiv_hdr)
-
-    lbl_m1_equiv = GtkLabel("M1: —")
-    lbl_m2_equiv = GtkLabel("M2: —")
-    for l in (lbl_m1_equiv, lbl_m2_equiv)
-        set_gtk_property!(l, :xalign, 0.0); push!(vbox_controls, l)
-    end
     push!(vbox_controls, GtkLabel(""))
 
-    function labeled_entry(box, lbl_text, default="0.0")
-        lbl = GtkLabel(lbl_text); set_gtk_property!(lbl, :xalign, 0.0); push!(box, lbl)
-        ent = GtkEntry(); set_gtk_property!(ent, :text, default); push!(box, ent); ent
-    end
+    # Units selector
+    lbl_units_hdr = GtkLabel("")
+    GAccessor.markup(lbl_units_hdr, "<b>Units:</b>")
+    set_gtk_property!(lbl_units_hdr, :xalign, 0.0)
+    push!(vbox_controls, lbl_units_hdr)
 
-    entry_m1_spec   = labeled_entry(vbox_controls, "M1 Specified Mass (oz):")
-    entry_m1_actual = labeled_entry(vbox_controls, "M1 Actual Mass (oz):")
-    entry_m1_angle  = labeled_entry(vbox_controls, "M1 Angle (degrees):")
+    combo_units = GtkComboBoxText()
+    push!(combo_units, "oz-in")
+    push!(combo_units, "g-cm")
+    set_gtk_property!(combo_units, :active, 0)
+    push!(vbox_controls, combo_units)
     push!(vbox_controls, GtkLabel(""))
-    entry_m2_spec   = labeled_entry(vbox_controls, "M2 Specified Mass (oz):")
-    entry_m2_actual = labeled_entry(vbox_controls, "M2 Actual Mass (oz):")
-    entry_m2_angle  = labeled_entry(vbox_controls, "M2 Angle (degrees):")
+
+    # Geometry inputs
+    lbl_geom_hdr = GtkLabel("")
+    GAccessor.markup(lbl_geom_hdr, "<b>Wheel Geometry:</b>")
+    set_gtk_property!(lbl_geom_hdr, :xalign, 0.0)
+    push!(vbox_controls, lbl_geom_hdr)
+
+    entry_r_m1    = labeled_entry(vbox_controls, "M1 Radius:", "17.5")
+    entry_r_m2    = labeled_entry(vbox_controls, "M2 Radius:", "16.5")
+    entry_r_width = labeled_entry(vbox_controls, "Wheel Width:", "8.5")
+
+    lbl_ratio = GtkLabel("Ratio M2/M1: 0.943")
+    set_gtk_property!(lbl_ratio, :xalign, 0.0)
+    push!(vbox_controls, lbl_ratio)
+    push!(vbox_controls, GtkLabel(""))
+
+    # Mass/angle inputs
+    entry_m1_mass  = labeled_entry(vbox_controls, "M1 Mass:")
+    entry_m1_angle = labeled_entry(vbox_controls, "M1 Angle (degrees):")
+    push!(vbox_controls, GtkLabel(""))
+    entry_m2_mass  = labeled_entry(vbox_controls, "M2 Mass:")
+    entry_m2_angle = labeled_entry(vbox_controls, "M2 Angle (degrees):")
     push!(vbox_controls, GtkLabel(""))
 
     btn_record = GtkButton("Update Plot & Record Step")
@@ -343,6 +358,7 @@ function main()
     for p in (:margin_start,:margin_end,:margin_top,:margin_bottom)
         set_gtk_property!(vbox_steps, p, 10)
     end
+
     lbl_rec = GtkLabel("")
     GAccessor.markup(lbl_rec, "<b>Recorded Steps:</b>")
     set_gtk_property!(lbl_rec, :xalign, 0.0)
@@ -350,7 +366,7 @@ function main()
 
     scrolled = GtkScrolledWindow()
     set_gtk_property!(scrolled, :min_content_width, 320)
-    set_gtk_property!(scrolled, :min_content_height, 600)
+    set_gtk_property!(scrolled, :min_content_height, 400)
     tv = GtkTextView()
     set_gtk_property!(tv, :editable, false)
     set_gtk_property!(tv, :cursor_visible, false)
@@ -358,19 +374,104 @@ function main()
     set_gtk_property!(tv, :left_margin, 5)
     set_gtk_property!(tv, :right_margin, 5)
     push!(scrolled, tv); push!(vbox_steps, scrolled)
+
+    # Equivalent masses
+    push!(vbox_steps, GtkLabel(""))
+    lbl_equiv_hdr = GtkLabel("")
+    GAccessor.markup(lbl_equiv_hdr, "<b>Cumulative Equivalent Masses:</b>")
+    set_gtk_property!(lbl_equiv_hdr, :xalign, 0.0)
+    push!(vbox_steps, lbl_equiv_hdr)
+
+    lbl_m1_equiv = GtkLabel("M1: —")
+    lbl_m2_equiv = GtkLabel("M2: —")
+    for l in (lbl_m1_equiv, lbl_m2_equiv)
+        set_gtk_property!(l, :xalign, 0.0); push!(vbox_steps, l)
+    end
+
+    # Moments
+    push!(vbox_steps, GtkLabel(""))
+    lbl_moments_hdr = GtkLabel("")
+    GAccessor.markup(lbl_moments_hdr, "<b>Balance Moments:</b>")
+    set_gtk_property!(lbl_moments_hdr, :xalign, 0.0)
+    push!(vbox_steps, lbl_moments_hdr)
+
+    lbl_static  = GtkLabel("Static:    —")
+    lbl_couple1 = GtkLabel("Couple M1: —")
+    lbl_couple2 = GtkLabel("Couple M2: —")
+    for l in (lbl_static, lbl_couple1, lbl_couple2)
+        set_gtk_property!(l, :xalign, 0.0); push!(vbox_steps, l)
+    end
+
     push!(hbox, vbox_steps)
+
+    # ── Helper functions ──────────────────────────────────────────────────────
+
+    function get_units()
+        idx = get_gtk_property(combo_units, :active, Int)
+        return idx == 0 ? ("oz", "in", "oz·in", "oz·in²") :
+                          ("g",  "cm", "g·cm",  "g·cm²")
+    end
+
+    function get_radii()
+        r_m1 = tryparse(Float64, get_gtk_property(entry_r_m1,   :text, String))
+        r_m2 = tryparse(Float64, get_gtk_property(entry_r_m2,   :text, String))
+        r_w  = tryparse(Float64, get_gtk_property(entry_r_width, :text, String))
+        r_m1 = (r_m1 === nothing || r_m1 <= 0) ? 17.5 : r_m1
+        r_m2 = (r_m2 === nothing || r_m2 <= 0) ? 16.5 : r_m2
+        r_w  = (r_w  === nothing || r_w  <= 0) ?  8.5 : r_w
+        return r_m1, r_m2, r_w
+    end
+
+    function update_ratio_label()
+        r_m1, r_m2, _ = get_radii()
+        set_gtk_property!(lbl_ratio, :label, @sprintf("Ratio M2/M1: %.3f", r_m2 / r_m1))
+    end
+
+    # Returns (s_mom, s_ang, c1_mom, c1_ang, c2_mom, c2_ang) from current state
+    function compute_moments()
+        r_m1, r_m2, r_w = get_radii()
+        z1       = m1_cumulative[] * r_m1
+        z2       = m2_cumulative[] * r_m2
+        z_static = z1 + z2
+        d        = r_w / 2.0
+        z_c1     =  z1 * d
+        z_c2     = -z2 * d
+        return (complex_to_mass(z_static), complex_to_angle(z_static),
+                complex_to_mass(z_c1),    complex_to_angle(z_c1),
+                complex_to_mass(z_c2),    complex_to_angle(z_c2))
+    end
+
+    function update_moments()
+        _, _, static_unit, couple_unit = get_units()
+        s_mom, s_ang, c1_mom, c1_ang, c2_mom, c2_ang = compute_moments()
+        set_gtk_property!(lbl_static,  :label,
+            @sprintf("Static:    %.3f %s @ %.1f°", s_mom, static_unit, s_ang))
+        set_gtk_property!(lbl_couple1, :label,
+            @sprintf("Couple M1: %.3f %s @ %.1f°", c1_mom, couple_unit, c1_ang))
+        set_gtk_property!(lbl_couple2, :label,
+            @sprintf("Couple M2: %.3f %s @ %.1f°", c2_mom, couple_unit, c2_ang))
+    end
+
+    function update_equiv_labels()
+        m1_em = complex_to_mass(m1_cumulative[])
+        m1_ea = complex_to_angle(m1_cumulative[])
+        m2_em = complex_to_mass(m2_cumulative[])
+        m2_ea = complex_to_angle(m2_cumulative[])
+        set_gtk_property!(lbl_m1_equiv, :label, @sprintf("M1: %.3f @ %.1f°", m1_em, m1_ea))
+        set_gtk_property!(lbl_m2_equiv, :label, @sprintf("M2: %.3f @ %.1f°", m2_em, m2_ea))
+    end
 
     function step_info_text(s)
         lines = String[]
-        s.m1_add    > 0 && push!(lines, "M1 add $(s.m1_add) oz @ $(s.m1_angle)°")
-        s.m1_remove > 0 && push!(lines, "M1 remove $(s.m1_remove) oz @ $(s.m1_remove_angle)°")
-        s.m2_add    > 0 && push!(lines, "M2 add $(s.m2_add) oz @ $(s.m2_angle)°")
-        s.m2_remove > 0 && push!(lines, "M2 remove $(s.m2_remove) oz @ $(s.m2_remove_angle)°")
-        isempty(lines) ? "No mass changes." : join(lines, "\n")
+        s.m1_add    > 0 && push!(lines, "M1 add $(s.m1_add) @ $(s.m1_angle)°")
+        s.m1_remove > 0 && push!(lines, "M1 remove $(s.m1_remove) @ $(s.m1_remove_angle)°")
+        s.m2_add    > 0 && push!(lines, "M2 add $(s.m2_add) @ $(s.m2_angle)°")
+        s.m2_remove > 0 && push!(lines, "M2 remove $(s.m2_remove) @ $(s.m2_remove_angle)°")
+        isempty(lines) ? "No mass changes (enter initial masses if present)." : join(lines, "\n")
     end
 
     function update_step_display()
-        buf = get_gtk_property(tv, :buffer, GtkTextBuffer)
+        buf  = get_gtk_property(tv, :buffer, GtkTextBuffer)
         text = ""
         if isempty(completed_steps)
             text = "No steps recorded yet.\n\nRecord steps as you complete them."
@@ -378,15 +479,15 @@ function main()
             if !isnothing(initial_masses[])
                 im_ = initial_masses[]
                 text *= "═══════════════════════════\nINITIAL BALANCING MASSES:\n═══════════════════════════\n"
-                text *= "M1: $(im_.m1_actual) oz @ $(im_.m1_angle)°\n"
-                text *= "M2: $(im_.m2_actual) oz @ $(im_.m2_angle)°\n═══════════════════════════\n\n"
+                text *= "M1: $(im_.m1_mass) @ $(im_.m1_angle)°\n"
+                text *= "M2: $(im_.m2_mass) @ $(im_.m2_angle)°\n═══════════════════════════\n\n"
             end
             for (i, sd) in enumerate(completed_steps)
                 text *= "$i. $(sd.desc)\n"
-                text *= "   M1: spec=$(sd.m1_spec), actual=$(sd.m1_actual), angle=$(sd.m1_angle)°\n"
-                text *= "   M2: spec=$(sd.m2_spec), actual=$(sd.m2_actual), angle=$(sd.m2_angle)°\n"
-                text *= "   ↳ M1 equiv: $(round(sd.m1_equiv_mass,digits=3)) oz @ $(round(sd.m1_equiv_angle,digits=1))°\n"
-                text *= "   ↳ M2 equiv: $(round(sd.m2_equiv_mass,digits=3)) oz @ $(round(sd.m2_equiv_angle,digits=1))°\n\n"
+                text *= "   M1: mass=$(sd.m1_mass), angle=$(sd.m1_angle)°\n"
+                text *= "   M2: mass=$(sd.m2_mass), angle=$(sd.m2_angle)°\n"
+                text *= "   ↳ M1 equiv: $(round(sd.m1_equiv_mass,digits=3)) @ $(round(sd.m1_equiv_angle,digits=1))°\n"
+                text *= "   ↳ M2 equiv: $(round(sd.m2_equiv_mass,digits=3)) @ $(round(sd.m2_equiv_angle,digits=1))°\n\n"
             end
         end
         set_gtk_property!(buf, :text, text)
@@ -394,101 +495,129 @@ function main()
 
     update_step_display()
 
+    # ── Canvas draw callback ──────────────────────────────────────────────────
     @guarded draw(canvas) do widget
         try
+            r_m1, r_m2, r_w = get_radii()
             draw_wheel(widget,
                 m1_spec_z[], m1_actual_z[], m1_equiv_z[],
-                m2_spec_z[], m2_actual_z[], m2_equiv_z[])
+                m2_spec_z[], m2_actual_z[], m2_equiv_z[],
+                r_m1, r_m2, r_w)
         catch e
             println("ERROR in draw: $e"); println(stacktrace(catch_backtrace()))
         end
     end
 
+    # ── Geometry / units callbacks ────────────────────────────────────────────
+    for entry in (entry_r_m1, entry_r_m2, entry_r_width)
+        signal_connect(entry, "changed") do _
+            update_ratio_label()
+            update_moments()
+            draw(canvas)
+        end
+    end
+
+    signal_connect(combo_units, "changed") do _
+        update_moments()
+    end
+
+    # ── Step selector callback ────────────────────────────────────────────────
     signal_connect(combo_step, "changed") do widget
         idx = get_gtk_property(combo_step, :active, Int) + 1
         (idx < 1 || idx > length(TEST_STEPS)) && return
         s = TEST_STEPS[idx]
-        if s.m1_add > 0
-            set_gtk_property!(entry_m1_spec,  :text, string(s.m1_add))
-            set_gtk_property!(entry_m1_angle, :text, string(s.m1_angle))
-        else
-            set_gtk_property!(entry_m1_spec,  :text, "0.0")
-            set_gtk_property!(entry_m1_angle, :text, "0.0")
-        end
-        if s.m2_add > 0
-            set_gtk_property!(entry_m2_spec,  :text, string(s.m2_add))
-            set_gtk_property!(entry_m2_angle, :text, string(s.m2_angle))
-        else
-            set_gtk_property!(entry_m2_spec,  :text, "0.0")
-            set_gtk_property!(entry_m2_angle, :text, "0.0")
-        end
-        set_gtk_property!(entry_m1_actual, :text, "0.0")
-        set_gtk_property!(entry_m2_actual, :text, "0.0")
-        set_gtk_property!(lbl_step_info,   :label, step_info_text(s))
+        set_gtk_property!(entry_m1_mass,  :text, s.m1_add > 0 ? string(s.m1_add)   : "0.0")
+        set_gtk_property!(entry_m1_angle, :text, s.m1_add > 0 ? string(s.m1_angle) : "0.0")
+        set_gtk_property!(entry_m2_mass,  :text, s.m2_add > 0 ? string(s.m2_add)   : "0.0")
+        set_gtk_property!(entry_m2_angle, :text, s.m2_add > 0 ? string(s.m2_angle) : "0.0")
+        set_gtk_property!(lbl_step_info,  :label, step_info_text(s))
     end
 
     set_gtk_property!(lbl_step_info, :label, step_info_text(TEST_STEPS[1]))
 
+    # ── Record callback ───────────────────────────────────────────────────────
     signal_connect(btn_record, "clicked") do widget
         try
             idx = get_gtk_property(combo_step, :active, Int) + 1
             s   = TEST_STEPS[idx]
 
-            m1_sv  = parse(Float64, get_gtk_property(entry_m1_spec,   :text, String))
-            m1_av  = parse(Float64, get_gtk_property(entry_m1_actual, :text, String))
-            m1_ang = parse(Float64, get_gtk_property(entry_m1_angle,  :text, String))
-            m2_sv  = parse(Float64, get_gtk_property(entry_m2_spec,   :text, String))
-            m2_av  = parse(Float64, get_gtk_property(entry_m2_actual, :text, String))
-            m2_ang = parse(Float64, get_gtk_property(entry_m2_angle,  :text, String))
+            m1_mass = parse(Float64, get_gtk_property(entry_m1_mass,  :text, String))
+            m1_ang  = parse(Float64, get_gtk_property(entry_m1_angle, :text, String))
+            m2_mass = parse(Float64, get_gtk_property(entry_m2_mass,  :text, String))
+            m2_ang  = parse(Float64, get_gtk_property(entry_m2_angle, :text, String))
 
-            m1_spec_z[]   = s.m1_add > 0 ? mass_angle_to_complex(s.m1_add, s.m1_angle) : 0.0+0.0im
-            m2_spec_z[]   = s.m2_add > 0 ? mass_angle_to_complex(s.m2_add, s.m2_angle) : 0.0+0.0im
-            m1_actual_z[] = mass_angle_to_complex(m1_av, m1_ang)
-            m2_actual_z[] = mass_angle_to_complex(m2_av, m2_ang)
+            # Per-step plot vectors
+            if idx == 1  # Step 0: treat entries as initial condition
+                m1_spec_z[]   = mass_angle_to_complex(m1_mass, m1_ang)
+                m2_spec_z[]   = mass_angle_to_complex(m2_mass, m2_ang)
+            else
+                m1_spec_z[]   = s.m1_add > 0 ? mass_angle_to_complex(s.m1_add, s.m1_angle) : 0.0+0.0im
+                m2_spec_z[]   = s.m2_add > 0 ? mass_angle_to_complex(s.m2_add, s.m2_angle) : 0.0+0.0im
+            end
+            m1_actual_z[] = mass_angle_to_complex(m1_mass, m1_ang)
+            m2_actual_z[] = mass_angle_to_complex(m2_mass, m2_ang)
 
-            # Net change this step = addition - removal (both at their defined angles)
-            m1_add_z    = s.m1_add    > 0 ? mass_angle_to_complex(m1_av,       s.m1_angle)        : 0.0+0.0im
-            m1_remove_z = s.m1_remove > 0 ? mass_angle_to_complex(s.m1_remove, s.m1_remove_angle) : 0.0+0.0im
-            m2_add_z    = s.m2_add    > 0 ? mass_angle_to_complex(m2_av,       s.m2_angle)        : 0.0+0.0im
-            m2_remove_z = s.m2_remove > 0 ? mass_angle_to_complex(s.m2_remove, s.m2_remove_angle) : 0.0+0.0im
-            m1_net = m1_add_z - m1_remove_z
-            m2_net = m2_add_z - m2_remove_z
+            # Cumulative update
+            if idx == 1  # Step 0: direct initial addition
+                m1_cumulative[] += mass_angle_to_complex(m1_mass, m1_ang)
+                m2_cumulative[] += mass_angle_to_complex(m2_mass, m2_ang)
+            else
+                m1_add_z    = s.m1_add    > 0 ? mass_angle_to_complex(m1_mass,     s.m1_angle)        : 0.0+0.0im
+                m1_remove_z = s.m1_remove > 0 ? mass_angle_to_complex(s.m1_remove, s.m1_remove_angle) : 0.0+0.0im
+                m2_add_z    = s.m2_add    > 0 ? mass_angle_to_complex(m2_mass,     s.m2_angle)        : 0.0+0.0im
+                m2_remove_z = s.m2_remove > 0 ? mass_angle_to_complex(s.m2_remove, s.m2_remove_angle) : 0.0+0.0im
+                m1_cumulative[] += m1_add_z - m1_remove_z
+                m2_cumulative[] += m2_add_z - m2_remove_z
+            end
 
-            m1_cumulative[] += m1_net;  m2_cumulative[] += m2_net
-            m1_equiv_z[]     = m1_cumulative[];  m2_equiv_z[] = m2_cumulative[]
+            m1_equiv_z[] = m1_cumulative[]
+            m2_equiv_z[] = m2_cumulative[]
 
-            m1_em = complex_to_mass(m1_cumulative[]);  m1_ea = complex_to_angle(m1_cumulative[])
-            m2_em = complex_to_mass(m2_cumulative[]);  m2_ea = complex_to_angle(m2_cumulative[])
+            m1_em = complex_to_mass(m1_cumulative[])
+            m1_ea = complex_to_angle(m1_cumulative[])
+            m2_em = complex_to_mass(m2_cumulative[])
+            m2_ea = complex_to_angle(m2_cumulative[])
 
-            set_gtk_property!(lbl_m1_equiv, :label, @sprintf("M1: %.3f oz @ %.1f°", m1_em, m1_ea))
-            set_gtk_property!(lbl_m2_equiv, :label, @sprintf("M2: %.3f oz @ %.1f°", m2_em, m2_ea))
+            update_equiv_labels()
+            update_moments()
 
-            idx == 1 && (initial_masses[] = (m1_actual=m1_av, m1_angle=m1_ang,
-                                             m2_actual=m2_av, m2_angle=m2_ang))
+            # Compute moments for storage
+            s_mom, s_ang, c1_mom, c1_ang, c2_mom, c2_ang = compute_moments()
+
+            idx == 1 && (initial_masses[] = (m1_mass=m1_mass, m1_angle=m1_ang,
+                                             m2_mass=m2_mass, m2_angle=m2_ang))
             draw(canvas)
 
             push!(completed_steps, (desc=s.desc,
-                m1_spec=m1_sv, m1_actual=m1_av, m1_angle=m1_ang,
-                m2_spec=m2_sv, m2_actual=m2_av, m2_angle=m2_ang,
+                m1_mass=m1_mass,   m1_angle=m1_ang,
+                m2_mass=m2_mass,   m2_angle=m2_ang,
                 m1_equiv_mass=m1_em, m1_equiv_angle=m1_ea,
-                m2_equiv_mass=m2_em, m2_equiv_angle=m2_ea))
+                m2_equiv_mass=m2_em, m2_equiv_angle=m2_ea,
+                static_moment=s_mom,  static_angle=s_ang,
+                couple_m1=c1_mom,     couple_m1_angle=c1_ang,
+                couple_m2=c2_mom,     couple_m2_angle=c2_ang))
 
             set_gtk_property!(lbl_status, :label,
                 "Completed: $(length(completed_steps))/$TOTAL_STEPS steps")
             update_step_display()
             println("✓ $(s.desc)")
-            println("  M1 equiv: $(round(m1_em,digits=3)) oz @ $(round(m1_ea,digits=1))°")
-            println("  M2 equiv: $(round(m2_em,digits=3)) oz @ $(round(m2_ea,digits=1))°")
+            println("  M1 equiv: $(round(m1_em,digits=3)) @ $(round(m1_ea,digits=1))°")
+            println("  M2 equiv: $(round(m2_em,digits=3)) @ $(round(m2_ea,digits=1))°")
         catch e
             println("Error: $e"); println(stacktrace(catch_backtrace()))
         end
     end
 
+    # ── Export callback ───────────────────────────────────────────────────────
     signal_connect(btn_export, "clicked") do widget
-        isempty(completed_steps) && (println("⚠ No steps recorded."); return)
+        if isempty(completed_steps)
+            println("⚠ No steps recorded.")
+            return
+        end
         export_all_steps_to_csv(csv_file, completed_steps)
     end
 
+    # ── Clear callback ────────────────────────────────────────────────────────
     signal_connect(btn_clear, "clicked") do widget
         empty!(completed_steps); initial_masses[] = nothing
         for r in (m1_cumulative, m2_cumulative, m1_spec_z, m2_spec_z,
@@ -498,12 +627,15 @@ function main()
         set_gtk_property!(lbl_status,   :label, "Completed: 0/$TOTAL_STEPS steps")
         set_gtk_property!(lbl_m1_equiv, :label, "M1: —")
         set_gtk_property!(lbl_m2_equiv, :label, "M2: —")
+        set_gtk_property!(lbl_static,   :label, "Static:    —")
+        set_gtk_property!(lbl_couple1,  :label, "Couple M1: —")
+        set_gtk_property!(lbl_couple2,  :label, "Couple M2: —")
         update_step_display(); draw(canvas)
         println("✓ Cleared")
     end
 
     showall(win)
-    println("Dynamic Wheel Balancing v0.0.5")
+    println("Dynamic Wheel Balancing v0.0.3")
 
     if !isinteractive()
         c = Condition()
