@@ -3,7 +3,7 @@
 **Dynamic Wheel Balancing Data Logger**
 
 
-A Julia/GTK desktop application for recording, visualizing, and exporting data from a two-plane dynamic wheel balancing test sequence. Vectors are plotted in an isometric perspective showing both balancing planes as they sit on the wheel axle. The Wheelz version has simpler (non-sequence-based) functionality
+A Julia/GTK desktop application for recording, visualizing, and exporting data from a two-plane dynamic wheel balancing test sequence. Vectors are plotted in an isometric perspective showing both balancing planes as they sit on the wheel axle.
 
 ---
 
@@ -52,9 +52,8 @@ The application guides an operator through a six-step balancing test sequence on
 
 ## Test Sequence
 
-Defined as a `const` FOR ACTION - intake from a .json or .csv
+Defined as a `const` intake from a `test_sequence.json` file or default to initial balancing condition if file path not found.
 
-Step 0 records the initial balancing masses already present on the wheel before the test sequence begins.
 
 ---
 
