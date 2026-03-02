@@ -1,0 +1,50 @@
+[
+  {
+    "step": 0,
+    "desc": "Step 0: Both planes with initial balancing masses",
+    "m1_add": 0.0,  "m1_angle": 0.0,
+    "m1_remove": 0.0, "m1_remove_angle": 0.0,
+    "m2_add": 0.0,  "m2_angle": 0.0,
+    "m2_remove": 0.0, "m2_remove_angle": 0.0
+  },
+  {
+    "step": 1,
+    "desc": "Step 1: M1 add 1 @ 45°",
+    "m1_add": 1.0,  "m1_angle": 45.0,
+    "m1_remove": 0.0, "m1_remove_angle": 0.0,
+    "m2_add": 0.0,  "m2_angle": 0.0,
+    "m2_remove": 0.0, "m2_remove_angle": 0.0
+  },
+  {
+    "step": 2,
+    "desc": "Step 2: M2 add 1 @ 45°",
+    "m1_add": 0.0,  "m1_angle": 0.0,
+    "m1_remove": 0.0, "m1_remove_angle": 0.0,
+    "m2_add": 1.0,  "m2_angle": 45.0,
+    "m2_remove": 0.0, "m2_remove_angle": 0.0
+  },
+  {
+    "step": 3,
+    "desc": "Step 3: M1 remove 1 @ 45° → transfer to M2",
+    "m1_add": 0.0,  "m1_angle": 0.0,
+    "m1_remove": 1.0, "m1_remove_angle": 45.0,
+    "m2_add": 1.0,  "m2_angle": 45.0,
+    "m2_remove": 0.0, "m2_remove_angle": 0.0
+  },
+  {
+    "step": 4,
+    "desc": "Step 4: M1 add 2 @ 225°",
+    "m1_add": 2.0,  "m1_angle": 225.0,
+    "m1_remove": 0.0, "m1_remove_angle": 0.0,
+    "m2_add": 0.0,  "m2_angle": 0.0,
+    "m2_remove": 0.0, "m2_remove_angle": 0.0
+  },
+  {
+    "step": 5,
+    "desc": "Step 5: M2 remove 2 @ 45°, add 1 @ 135°",
+    "m1_add": 0.0,  "m1_angle": 0.0,
+    "m1_remove": 0.0, "m1_remove_angle": 0.0,
+    "m2_add": 1.0,  "m2_angle": 135.0,
+    "m2_remove": 2.0, "m2_remove_angle": 45.0
+  }
+]
