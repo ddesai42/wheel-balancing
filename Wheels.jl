@@ -1,38 +1,45 @@
 #<Filename>: <Wheels.jl>
 #<Author>:   <DANIEL DESAI>
 #<Updated>:  <2026-02-19>
-#<Version>:  <0.0.3>
+#<Version>:  <0.0.4>
 
 using Gtk
 using Cairo
 using Printf
 using Dates
+using JSON3
 
 # ============================================================================
-# TEST SEQUENCE
+# TEST SEQUENCE  — loaded from external JSON file
 # ============================================================================
 
-const TEST_STEPS = [
-    (step=0, desc="Step 0: Both planes with initial balancing masses",
-     m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
-     m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=1, desc="Step 1: M1 add 1 @ 45°",
-     m1_add=1.0, m1_angle=45.0,  m1_remove=0.0, m1_remove_angle=0.0,
-     m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=2, desc="Step 2: M2 add 1 @ 45°",
-     m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
-     m2_add=1.0, m2_angle=45.0,  m2_remove=0.0, m2_remove_angle=0.0),
-    (step=3, desc="Step 3: M1 remove 1 @ 45° → transfer to M2",
-     m1_add=0.0, m1_angle=0.0,   m1_remove=1.0, m1_remove_angle=45.0,
-     m2_add=1.0, m2_angle=45.0,  m2_remove=0.0, m2_remove_angle=0.0),
-    (step=4, desc="Step 4: M1 add 2 @ 225°",
-     m1_add=2.0, m1_angle=225.0, m1_remove=0.0, m1_remove_angle=0.0,
-     m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0),
-    (step=5, desc="Step 5: M2 remove 2 @ 45°, add 1 @ 135°",
-     m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
-     m2_add=1.0, m2_angle=135.0, m2_remove=2.0, m2_remove_angle=45.0)
-]
+const TEST_SEQUENCE_FILE = "test_sequence.json"
 
+function load_test_steps(path::String)
+    if !isfile(path)
+        error("Test-sequence file not found: $path\n" *
+              "Please create '$path' before running.")
+    end
+    raw = JSON3.read(read(path, String))   # Vector of dicts
+    steps = map(raw) do d
+        (step            = Int(d[:step]),
+         desc            = String(d[:desc]),
+         m1_add          = Float64(get(d, :m1_add,          0.0)),
+         m1_angle        = Float64(get(d, :m1_angle,        0.0)),
+         m1_remove       = Float64(get(d, :m1_remove,       0.0)),
+         m1_remove_angle = Float64(get(d, :m1_remove_angle, 0.0)),
+         m2_add          = Float64(get(d, :m2_add,          0.0)),
+         m2_angle        = Float64(get(d, :m2_angle,        0.0)),
+         m2_remove       = Float64(get(d, :m2_remove,       0.0)),
+         m2_remove_angle = Float64(get(d, :m2_remove_angle, 0.0)))
+    end
+    # Sort by step number so file order doesn't matter
+    sort!(steps, by = s -> s.step)
+    println("✓ Loaded $(length(steps)) steps from $path")
+    return steps
+end
+
+const TEST_STEPS  = load_test_steps(TEST_SEQUENCE_FILE)
 const TOTAL_STEPS = count(s -> s.step > 0, TEST_STEPS)
 
 # ============================================================================
@@ -82,7 +89,7 @@ function export_all_steps_to_csv(csv_file, completed_steps)
 end
 
 # ============================================================================
-# DRAWING
+# DRAWING  (unchanged)
 # ============================================================================
 
 function wheel_to_screen(r_px, angle_deg, iso_skew_x, iso_skew_y)
@@ -97,7 +104,6 @@ end
 function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
                     label, col_spec, col_actual, col_equiv,
                     spec_z, actual_z, equiv_z)
-    # Rings
     for ri in 1:3
         r_px = ri * scale
         set_source_rgba(ctx, 0.55, 0.55, 0.55, 0.7)
@@ -112,7 +118,6 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         stroke(ctx)
     end
 
-    # Spokes
     set_source_rgba(ctx, 0.65, 0.65, 0.65, 0.5)
     set_line_width(ctx, 1.0)
     for a in [0.0, 90.0, 180.0, 270.0]
@@ -120,7 +125,6 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         move_to(ctx, cx, cy); line_to(ctx, cx+dx, cy+dy); stroke(ctx)
     end
 
-    # Angle labels
     select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_NORMAL)
     set_font_size(ctx, 10)
     set_source_rgb(ctx, 0.25, 0.25, 0.25)
@@ -129,14 +133,12 @@ function draw_plane(ctx, cx, cy, scale, iso_skew_x, iso_skew_y,
         move_to(ctx, cx+dx-8, cy+dy+4); show_text(ctx, lbl)
     end
 
-    # Plane label
     select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_BOLD)
     set_font_size(ctx, 14)
     set_source_rgb(ctx, 0.1, 0.1, 0.1)
     dx0, dy0 = wheel_to_screen(3.8*scale, 0.0, iso_skew_x, iso_skew_y)
     move_to(ctx, cx+dx0-8, cy+dy0-6); show_text(ctx, label)
 
-    # Vector helper
     function draw_vec(z, color, style, tag)
         m = complex_to_mass(z)
         m < 0.001 && return
@@ -200,7 +202,6 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
     cx_m1   = w/2 + sep/2
     cx_m2   = w/2 - sep/2
 
-    # Axle
     set_source_rgba(ctx, 0.35, 0.35, 0.35, 0.8)
     set_line_width(ctx, 4.0)
     move_to(ctx, cx_m2, cy); line_to(ctx, cx_m1, cy); stroke(ctx)
@@ -220,7 +221,6 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
                "M2", (0.1,0.2,0.9), (0.1,0.2,0.9), (0.55,0.0,0.75),
                m2_spec_z, m2_actual_z, m2_equiv_z)
 
-    # Legend
     select_font_face(ctx, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_NORMAL)
     set_font_size(ctx, 11)
     lx, ly = 18.0, h - 100.0
@@ -248,7 +248,7 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
 end
 
 # ============================================================================
-# MAIN
+# MAIN  (unchanged except version string)
 # ============================================================================
 
 function main()
@@ -258,7 +258,6 @@ function main()
     completed_steps = []
     initial_masses  = Ref{Union{Nothing,NamedTuple}}(nothing)
 
-    # All state refs
     m1_cumulative = Ref(0.0+0.0im)
     m2_cumulative = Ref(0.0+0.0im)
     m1_spec_z     = Ref(0.0+0.0im)
@@ -272,7 +271,6 @@ function main()
     hbox = GtkBox(:h)
     push!(win, hbox)
 
-    # ── Left panel ────────────────────────────────────────────────────────────
     vbox_controls = GtkBox(:v)
     set_gtk_property!(vbox_controls, :spacing, 5)
     for p in (:margin_start,:margin_end,:margin_top,:margin_bottom)
@@ -280,13 +278,11 @@ function main()
     end
     push!(hbox, vbox_controls)
 
-    # Entry helper — defined first so available for all fields
     function labeled_entry(box, lbl_text, default="0.0")
         lbl = GtkLabel(lbl_text); set_gtk_property!(lbl, :xalign, 0.0); push!(box, lbl)
         ent = GtkEntry(); set_gtk_property!(ent, :text, default); push!(box, ent); ent
     end
 
-    # Step selector
     lbl_step = GtkLabel("Test Step:")
     set_gtk_property!(lbl_step, :xalign, 0.0)
     push!(vbox_controls, lbl_step)
@@ -295,6 +291,11 @@ function main()
     for s in TEST_STEPS; push!(combo_step, s.desc); end
     set_gtk_property!(combo_step, :active, 0)
     push!(vbox_controls, combo_step)
+
+    # Show which file is loaded
+    lbl_seq_file = GtkLabel("Sequence: $TEST_SEQUENCE_FILE")
+    set_gtk_property!(lbl_seq_file, :xalign, 0.0)
+    push!(vbox_controls, lbl_seq_file)
 
     lbl_status = GtkLabel("Completed: 0/$TOTAL_STEPS steps")
     set_gtk_property!(lbl_status, :xalign, 0.0)
@@ -306,7 +307,6 @@ function main()
     push!(vbox_controls, lbl_step_info)
     push!(vbox_controls, GtkLabel(""))
 
-    # Units selector
     lbl_units_hdr = GtkLabel("")
     GAccessor.markup(lbl_units_hdr, "<b>Units:</b>")
     set_gtk_property!(lbl_units_hdr, :xalign, 0.0)
@@ -319,7 +319,6 @@ function main()
     push!(vbox_controls, combo_units)
     push!(vbox_controls, GtkLabel(""))
 
-    # Geometry inputs
     lbl_geom_hdr = GtkLabel("")
     GAccessor.markup(lbl_geom_hdr, "<b>Wheel Geometry:</b>")
     set_gtk_property!(lbl_geom_hdr, :xalign, 0.0)
@@ -334,7 +333,6 @@ function main()
     push!(vbox_controls, lbl_ratio)
     push!(vbox_controls, GtkLabel(""))
 
-    # Mass/angle inputs
     entry_m1_mass  = labeled_entry(vbox_controls, "M1 Mass:")
     entry_m1_angle = labeled_entry(vbox_controls, "M1 Angle (degrees):")
     push!(vbox_controls, GtkLabel(""))
@@ -347,12 +345,10 @@ function main()
     btn_clear  = GtkButton("Clear All Steps")
     for b in (btn_record, btn_export, btn_clear); push!(vbox_controls, b); end
 
-    # ── Canvas ────────────────────────────────────────────────────────────────
     canvas = GtkCanvas()
     set_gtk_property!(canvas, :expand, true)
     push!(hbox, canvas)
 
-    # ── Right panel ───────────────────────────────────────────────────────────
     vbox_steps = GtkBox(:v)
     set_gtk_property!(vbox_steps, :spacing, 5)
     for p in (:margin_start,:margin_end,:margin_top,:margin_bottom)
@@ -375,7 +371,6 @@ function main()
     set_gtk_property!(tv, :right_margin, 5)
     push!(scrolled, tv); push!(vbox_steps, scrolled)
 
-    # Equivalent masses
     push!(vbox_steps, GtkLabel(""))
     lbl_equiv_hdr = GtkLabel("")
     GAccessor.markup(lbl_equiv_hdr, "<b>Cumulative Equivalent Masses:</b>")
@@ -388,7 +383,6 @@ function main()
         set_gtk_property!(l, :xalign, 0.0); push!(vbox_steps, l)
     end
 
-    # Moments
     push!(vbox_steps, GtkLabel(""))
     lbl_moments_hdr = GtkLabel("")
     GAccessor.markup(lbl_moments_hdr, "<b>Balance Moments:</b>")
@@ -403,8 +397,6 @@ function main()
     end
 
     push!(hbox, vbox_steps)
-
-    # ── Helper functions ──────────────────────────────────────────────────────
 
     function get_units()
         idx = get_gtk_property(combo_units, :active, Int)
@@ -427,7 +419,6 @@ function main()
         set_gtk_property!(lbl_ratio, :label, @sprintf("Ratio M2/M1: %.3f", r_m2 / r_m1))
     end
 
-    # Returns (s_mom, s_ang, c1_mom, c1_ang, c2_mom, c2_ang) from current state
     function compute_moments()
         r_m1, r_m2, r_w = get_radii()
         z1       = m1_cumulative[] * r_m1
@@ -495,7 +486,6 @@ function main()
 
     update_step_display()
 
-    # ── Canvas draw callback ──────────────────────────────────────────────────
     @guarded draw(canvas) do widget
         try
             r_m1, r_m2, r_w = get_radii()
@@ -508,7 +498,6 @@ function main()
         end
     end
 
-    # ── Geometry / units callbacks ────────────────────────────────────────────
     for entry in (entry_r_m1, entry_r_m2, entry_r_width)
         signal_connect(entry, "changed") do _
             update_ratio_label()
@@ -521,7 +510,6 @@ function main()
         update_moments()
     end
 
-    # ── Step selector callback ────────────────────────────────────────────────
     signal_connect(combo_step, "changed") do widget
         idx = get_gtk_property(combo_step, :active, Int) + 1
         (idx < 1 || idx > length(TEST_STEPS)) && return
@@ -535,7 +523,6 @@ function main()
 
     set_gtk_property!(lbl_step_info, :label, step_info_text(TEST_STEPS[1]))
 
-    # ── Record callback ───────────────────────────────────────────────────────
     signal_connect(btn_record, "clicked") do widget
         try
             idx = get_gtk_property(combo_step, :active, Int) + 1
@@ -546,8 +533,7 @@ function main()
             m2_mass = parse(Float64, get_gtk_property(entry_m2_mass,  :text, String))
             m2_ang  = parse(Float64, get_gtk_property(entry_m2_angle, :text, String))
 
-            # Per-step plot vectors
-            if idx == 1  # Step 0: treat entries as initial condition
+            if idx == 1
                 m1_spec_z[]   = mass_angle_to_complex(m1_mass, m1_ang)
                 m2_spec_z[]   = mass_angle_to_complex(m2_mass, m2_ang)
             else
@@ -557,8 +543,7 @@ function main()
             m1_actual_z[] = mass_angle_to_complex(m1_mass, m1_ang)
             m2_actual_z[] = mass_angle_to_complex(m2_mass, m2_ang)
 
-            # Cumulative update
-            if idx == 1  # Step 0: direct initial addition
+            if idx == 1
                 m1_cumulative[] += mass_angle_to_complex(m1_mass, m1_ang)
                 m2_cumulative[] += mass_angle_to_complex(m2_mass, m2_ang)
             else
@@ -581,7 +566,6 @@ function main()
             update_equiv_labels()
             update_moments()
 
-            # Compute moments for storage
             s_mom, s_ang, c1_mom, c1_ang, c2_mom, c2_ang = compute_moments()
 
             idx == 1 && (initial_masses[] = (m1_mass=m1_mass, m1_angle=m1_ang,
@@ -608,7 +592,6 @@ function main()
         end
     end
 
-    # ── Export callback ───────────────────────────────────────────────────────
     signal_connect(btn_export, "clicked") do widget
         if isempty(completed_steps)
             println("⚠ No steps recorded.")
@@ -617,7 +600,6 @@ function main()
         export_all_steps_to_csv(csv_file, completed_steps)
     end
 
-    # ── Clear callback ────────────────────────────────────────────────────────
     signal_connect(btn_clear, "clicked") do widget
         empty!(completed_steps); initial_masses[] = nothing
         for r in (m1_cumulative, m2_cumulative, m1_spec_z, m2_spec_z,
@@ -635,7 +617,7 @@ function main()
     end
 
     showall(win)
-    println("Dynamic Wheel Balancing v0.0.3")
+    println("Dynamic Wheel Balancing v0.0.4  |  sequence: $TEST_SEQUENCE_FILE  |  $(length(TEST_STEPS)) steps")
 
     if !isinteractive()
         c = Condition()
