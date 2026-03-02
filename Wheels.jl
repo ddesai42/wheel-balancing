@@ -1,7 +1,7 @@
 #<Filename>: <Wheels.jl>
 #<Author>:   <DANIEL DESAI>
 #<Updated>:  <2026-03-02>
-#<Version>:  <0.0.3>
+#<Version>:  <0.0.4>
 
 using Gtk
 using Cairo
@@ -26,10 +26,11 @@ function load_test_steps(path::String)
         println("⚠ '$path' not found")
         return STEP0_FALLBACK
     end
-    raw = JSON3.read(read(path, String))   # Vector of dicts
+    raw = JSON3.read(read(path, String))
     steps = map(raw) do d
         (step            = Int(d[:step]),
-         desc            = String(d[:desc]),
+         condition       = String(d[:condition]),
+         action          = String(d[:action]),
          m1_add          = Float64(get(d, :m1_add,          0.0)),
          m1_angle        = Float64(get(d, :m1_angle,        0.0)),
          m1_remove       = Float64(get(d, :m1_remove,       0.0)),
@@ -39,7 +40,6 @@ function load_test_steps(path::String)
          m2_remove       = Float64(get(d, :m2_remove,       0.0)),
          m2_remove_angle = Float64(get(d, :m2_remove_angle, 0.0)))
     end
-    # Sort by step number so file order doesn't matter
     sort!(steps, by = s -> s.step)
     println("✓ Loaded $(length(steps)) steps from $path")
     return steps
@@ -53,18 +53,81 @@ const TOTAL_STEPS = count(s -> s.step > 0, TEST_STEPS)
 # ============================================================================
 
 mass_angle_to_complex(m, a) = m * exp(im * deg2rad(a))
-complex_to_mass(z) = abs(z)
+complex_to_mass(z)  = abs(z)
 function complex_to_angle(z)
     a = rad2deg(angle(z))
     return a < 0 ? a + 360 : a
 end
 
 # ============================================================================
+# CAMBER-CORRECTED MOMENT COMPUTATION
+#
+# Let φ = camber angle (degrees, positive = top of wheel tilts outward).
+# For a spinning wheel with imbalance mass at radius r, the centrifugal force
+# vector rotates in the plane perpendicular to the spin axis.  When the wheel
+# is cambered by φ the force has:
+#
+#   • A lateral component  F_lat = F · cos(φ)   — same direction as φ=0
+#   • An axial  component  F_axl = F · sin(φ)   — along the spin axis
+#
+# Static moment (net lateral force × 0 moment-arm about CG):
+#   Z_static = (Z1 + Z2) · cos(φ)
+#
+# Couple moments at each correction plane (half-width d = r_width/2):
+#   Each plane i has two orthogonal couple contributions:
+#     Lateral couple : Z_i · d · cos(φ)     [in the wheel plane]
+#     Axial   couple : Z_i · r_i · sin(φ)   [perpendicular, hence 90° phase shift]
+#
+#   Because these act about perpendicular axes they add in quadrature:
+#     |couple_i| = |Z_i| · √( (d·cos φ)² + (r_i·sin φ)² )
+#   The resultant angle rotates by:
+#     δ_i = atan( r_i·sin(φ) / (d·cos(φ)) )
+#   relative to the lateral-only couple angle.
+#
+#   Sign convention: M1 couple is positive (Z1·d), M2 couple is negative (-Z2·d)
+#   for the lateral part; the axial part has the same sign for both planes
+#   because both forces tend to rock the axle in the same direction when φ≠0.
+# ============================================================================
+
+function compute_moments_camber(m1_cumulative, m2_cumulative,
+                                r_m1, r_m2, r_width, camber_deg)
+    φ  = deg2rad(camber_deg)
+    cφ = cos(φ)
+    sφ = sin(φ)
+    d  = r_width / 2.0
+
+    z1 = m1_cumulative
+    z2 = m2_cumulative
+
+    # --- Static moment ---
+    z_static = (z1 + z2) * cφ
+
+    # --- Couple at M1 plane ---
+    # Lateral part: +z1 * d * cos(φ)
+    lat1 = z1 * (d * cφ)
+    # Axial part: z1 * r_m1 * sin(φ), phase-shifted by +90° (im factor)
+    axl1 = z1 * (r_m1 * sφ) * im
+    z_c1 = lat1 + axl1
+
+    # --- Couple at M2 plane ---
+    # Lateral part: -z2 * d * cos(φ)  (opposite sign — separation)
+    lat2 = -z2 * (d * cφ)
+    # Axial part: z2 * r_m2 * sin(φ), same axial direction → +im
+    axl2 = z2 * (r_m2 * sφ) * im
+    z_c2 = lat2 + axl2
+
+    return (complex_to_mass(z_static), complex_to_angle(z_static),
+            complex_to_mass(z_c1),     complex_to_angle(z_c1),
+            complex_to_mass(z_c2),     complex_to_angle(z_c2))
+end
+
+# ============================================================================
 # CSV
 # ============================================================================
 
-const CSV_HEADER = "Step,M1_Mass,M1_Angle,M2_Mass,M2_Angle," *
+const CSV_HEADER = "Step_Condition,Step_Action,M1_Mass,M1_Angle,M2_Mass,M2_Angle," *
                    "M1_Equiv_Mass,M1_Equiv_Angle,M2_Equiv_Mass,M2_Equiv_Angle," *
+                   "Camber_Deg," *
                    "Static_Moment,Static_Angle,Couple_M1,Couple_M1_Angle,Couple_M2,Couple_M2_Angle"
 
 function initialize_csv(csv_file)
@@ -78,10 +141,11 @@ function export_all_steps_to_csv(csv_file, completed_steps)
         open(csv_file, "w") do io
             println(io, CSV_HEADER)
             for sd in completed_steps
-                println(io, "\"$(sd.desc)\",$(sd.m1_mass),$(sd.m1_angle)," *
+                println(io,                             "\"$(sd.condition)\",\"$(sd.action)\",$(sd.m1_mass),$(sd.m1_angle)," *
                             "$(sd.m2_mass),$(sd.m2_angle)," *
                             "$(sd.m1_equiv_mass),$(sd.m1_equiv_angle)," *
                             "$(sd.m2_equiv_mass),$(sd.m2_equiv_angle)," *
+                            "$(sd.camber_deg)," *
                             "$(sd.static_moment),$(sd.static_angle)," *
                             "$(sd.couple_m1),$(sd.couple_m1_angle)," *
                             "$(sd.couple_m2),$(sd.couple_m2_angle)")
@@ -95,7 +159,7 @@ function export_all_steps_to_csv(csv_file, completed_steps)
 end
 
 # ============================================================================
-# DRAWING  (unchanged)
+# DRAWING
 # ============================================================================
 
 function wheel_to_screen(r_px, angle_deg, iso_skew_x, iso_skew_y)
@@ -243,8 +307,8 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
         elseif shape == :square
             rectangle(ctx, lx-5, ly-5, 10, 10); fill(ctx)
         elseif shape == :diamond
-            move_to(ctx, lx, ly-7); line_to(ctx, lx+5, ly)
-            line_to(ctx, lx, ly+7); line_to(ctx, lx-5, ly)
+            move_to(ctx, lx, ly-7); line_to(ctx, lx+6, ly)
+            line_to(ctx, lx, ly+7); line_to(ctx, lx-6, ly)
             close_path(ctx); fill(ctx)
         end
         set_source_rgb(ctx, 0.1, 0.1, 0.1)
@@ -254,7 +318,7 @@ function draw_wheel(canvas, m1_spec_z, m1_actual_z, m1_equiv_z,
 end
 
 # ============================================================================
-# MAIN  (unchanged except version string)
+# MAIN
 # ============================================================================
 
 function main()
@@ -294,11 +358,10 @@ function main()
     push!(vbox_controls, lbl_step)
 
     combo_step = GtkComboBoxText()
-    for s in TEST_STEPS; push!(combo_step, s.desc); end
+    for s in TEST_STEPS; push!(combo_step, "Step $(s.step): $(s.condition) — $(s.action)"); end
     set_gtk_property!(combo_step, :active, 0)
     push!(vbox_controls, combo_step)
 
-    # Show which file is loaded
     lbl_seq_file = GtkLabel("Sequence: $TEST_SEQUENCE_FILE")
     set_gtk_property!(lbl_seq_file, :xalign, 0.0)
     push!(vbox_controls, lbl_seq_file)
@@ -334,10 +397,17 @@ function main()
     entry_r_m2    = labeled_entry(vbox_controls, "M2 Radius:", "16.5")
     entry_r_width = labeled_entry(vbox_controls, "Wheel Width:", "8.5")
 
+    entry_camber = labeled_entry(vbox_controls, "Camber Angle (°, + = top-out):", "0.0")
+
     lbl_ratio = GtkLabel("Ratio M2/M1: 0.943")
     set_gtk_property!(lbl_ratio, :xalign, 0.0)
     push!(vbox_controls, lbl_ratio)
+
+    lbl_camber_info = GtkLabel("cos(φ)=1.000  sin(φ)=0.000")
+    set_gtk_property!(lbl_camber_info, :xalign, 0.0)
+    push!(vbox_controls, lbl_camber_info)
     push!(vbox_controls, GtkLabel(""))
+    # -------------------------------------------------------------------------
 
     entry_m1_mass  = labeled_entry(vbox_controls, "M1 Mass:")
     entry_m1_angle = labeled_entry(vbox_controls, "M1 Angle (degrees):")
@@ -391,7 +461,7 @@ function main()
 
     push!(vbox_steps, GtkLabel(""))
     lbl_moments_hdr = GtkLabel("")
-    GAccessor.markup(lbl_moments_hdr, "<b>Balance Moments:</b>")
+    GAccessor.markup(lbl_moments_hdr, "<b>Balance Moments (camber-corrected):</b>")
     set_gtk_property!(lbl_moments_hdr, :xalign, 0.0)
     push!(vbox_steps, lbl_moments_hdr)
 
@@ -403,6 +473,10 @@ function main()
     end
 
     push!(hbox, vbox_steps)
+
+    # -------------------------------------------------------------------------
+    # Helper closures
+    # -------------------------------------------------------------------------
 
     function get_units()
         idx = get_gtk_property(combo_units, :active, Int)
@@ -420,22 +494,27 @@ function main()
         return r_m1, r_m2, r_w
     end
 
+    function get_camber()
+        v = tryparse(Float64, get_gtk_property(entry_camber, :text, String))
+        return v === nothing ? 0.0 : v
+    end
+
     function update_ratio_label()
         r_m1, r_m2, _ = get_radii()
         set_gtk_property!(lbl_ratio, :label, @sprintf("Ratio M2/M1: %.3f", r_m2 / r_m1))
     end
 
+    function update_camber_info()
+        φ = deg2rad(get_camber())
+        set_gtk_property!(lbl_camber_info, :label,
+            @sprintf("cos(φ)=%.4f  sin(φ)=%.4f", cos(φ), sin(φ)))
+    end
+
     function compute_moments()
         r_m1, r_m2, r_w = get_radii()
-        z1       = m1_cumulative[] * r_m1
-        z2       = m2_cumulative[] * r_m2
-        z_static = z1 + z2
-        d        = r_w / 2.0
-        z_c1     =  z1 * d
-        z_c2     = -z2 * d
-        return (complex_to_mass(z_static), complex_to_angle(z_static),
-                complex_to_mass(z_c1),    complex_to_angle(z_c1),
-                complex_to_mass(z_c2),    complex_to_angle(z_c2))
+        φ_deg = get_camber()
+        return compute_moments_camber(m1_cumulative[], m2_cumulative[],
+                                      r_m1, r_m2, r_w, φ_deg)
     end
 
     function update_moments()
@@ -480,7 +559,9 @@ function main()
                 text *= "M2: $(im_.m2_mass) @ $(im_.m2_angle)°\n═══════════════════════════\n\n"
             end
             for (i, sd) in enumerate(completed_steps)
-                text *= "$i. $(sd.desc)\n"
+                text *= "Step $i — $(sd.condition)\n"
+                text *= "   $(sd.action)\n"
+                text *= "   Camber: $(sd.camber_deg)°\n"
                 text *= "   M1: mass=$(sd.m1_mass), angle=$(sd.m1_angle)°\n"
                 text *= "   M2: mass=$(sd.m2_mass), angle=$(sd.m2_angle)°\n"
                 text *= "   ↳ M1 equiv: $(round(sd.m1_equiv_mass,digits=3)) @ $(round(sd.m1_equiv_angle,digits=1))°\n"
@@ -491,6 +572,7 @@ function main()
     end
 
     update_step_display()
+    update_camber_info()
 
     @guarded draw(canvas) do widget
         try
@@ -510,6 +592,11 @@ function main()
             update_moments()
             draw(canvas)
         end
+    end
+
+    signal_connect(entry_camber, "changed") do _
+        update_camber_info()
+        update_moments()
     end
 
     signal_connect(combo_units, "changed") do _
@@ -534,10 +621,11 @@ function main()
             idx = get_gtk_property(combo_step, :active, Int) + 1
             s   = TEST_STEPS[idx]
 
-            m1_mass = parse(Float64, get_gtk_property(entry_m1_mass,  :text, String))
-            m1_ang  = parse(Float64, get_gtk_property(entry_m1_angle, :text, String))
-            m2_mass = parse(Float64, get_gtk_property(entry_m2_mass,  :text, String))
-            m2_ang  = parse(Float64, get_gtk_property(entry_m2_angle, :text, String))
+            m1_mass   = parse(Float64, get_gtk_property(entry_m1_mass,  :text, String))
+            m1_ang    = parse(Float64, get_gtk_property(entry_m1_angle, :text, String))
+            m2_mass   = parse(Float64, get_gtk_property(entry_m2_mass,  :text, String))
+            m2_ang    = parse(Float64, get_gtk_property(entry_m2_angle, :text, String))
+            camber_deg = get_camber()
 
             if idx == 1
                 m1_spec_z[]   = mass_angle_to_complex(m1_mass, m1_ang)
@@ -578,7 +666,8 @@ function main()
                                              m2_mass=m2_mass, m2_angle=m2_ang))
             draw(canvas)
 
-            push!(completed_steps, (desc=s.desc,
+            push!(completed_steps, (condition=s.condition, action=s.action,
+                camber_deg=camber_deg,
                 m1_mass=m1_mass,   m1_angle=m1_ang,
                 m2_mass=m2_mass,   m2_angle=m2_ang,
                 m1_equiv_mass=m1_em, m1_equiv_angle=m1_ea,
@@ -590,9 +679,12 @@ function main()
             set_gtk_property!(lbl_status, :label,
                 "Completed: $(length(completed_steps))/$TOTAL_STEPS steps")
             update_step_display()
-            println("✓ $(s.desc)")
+                println("✓ Step $(s.step): $(s.condition) — $(s.action)  [camber=$(camber_deg)°]")
             println("  M1 equiv: $(round(m1_em,digits=3)) @ $(round(m1_ea,digits=1))°")
             println("  M2 equiv: $(round(m2_em,digits=3)) @ $(round(m2_ea,digits=1))°")
+            println("  Static:   $(round(s_mom,digits=3)) @ $(round(s_ang,digits=1))°")
+            println("  Couple M1:$(round(c1_mom,digits=3)) @ $(round(c1_ang,digits=1))°")
+            println("  Couple M2:$(round(c2_mom,digits=3)) @ $(round(c2_ang,digits=1))°")
         catch e
             println("Error: $e"); println(stacktrace(catch_backtrace()))
         end
