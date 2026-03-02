@@ -144,9 +144,4 @@ Clicking **Export All Steps to CSV** writes `balancing_results.csv` to the worki
 
 ---
 
-## Angle Convention
 
-All angles follow the **balancer instrument convention**:
-- **0° = top of wheel**
-- **Clockwise positive**
-- Range: 0°–360°
