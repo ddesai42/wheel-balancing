@@ -1,7 +1,7 @@
 #<Filename>: <Wheels.jl>
 #<Author>:   <DANIEL DESAI>
-#<Updated>:  <2026-02-19>
-#<Version>:  <0.0.4>
+#<Updated>:  <2026-03-02>
+#<Version>:  <0.0.3>
 
 using Gtk
 using Cairo
@@ -15,10 +15,16 @@ using JSON3
 
 const TEST_SEQUENCE_FILE = "test_sequence.json"
 
+const STEP0_FALLBACK = [
+    (step=0, desc="Step 0: Both planes with initial balancing masses",
+     m1_add=0.0, m1_angle=0.0,   m1_remove=0.0, m1_remove_angle=0.0,
+     m2_add=0.0, m2_angle=0.0,   m2_remove=0.0, m2_remove_angle=0.0)
+]
+
 function load_test_steps(path::String)
     if !isfile(path)
-        error("Test-sequence file not found: $path\n" *
-              "Please create '$path' before running.")
+        println("⚠ '$path' not found")
+        return STEP0_FALLBACK
     end
     raw = JSON3.read(read(path, String))   # Vector of dicts
     steps = map(raw) do d
